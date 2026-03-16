@@ -13,12 +13,14 @@ Allow writers to work in Scrivener while Claude reads their project to help with
 
 **Philosophy:** Write in Scrivener. Ask Claude for help. All writing stays in Scrivener.
 
-## Implemented MCP Tools (10)
+## Implemented MCP Tools (12)
 
 | Tool | Description |
 |------|-------------|
 | `find_projects` | Scan common locations (Documents, Dropbox, iCloud) for .scriv projects |
 | `open_project` | Load a Scrivener project by path |
+| `refresh_project` | Reload binder structure from disk (after adding/renaming in Scrivener) |
+| `check_document_freshness` | Check if a document was modified since last read; if so, re-read before commenting |
 | `scan_project` | Bird's eye view: chapter titles, word counts, synopses, opening lines |
 | `list_binder` | Show project structure (folders, documents) as tree |
 | `read_document` | Read a single document by title, path, or UUID |
@@ -27,6 +29,8 @@ Allow writers to work in Scrivener while Claude reads their project to help with
 | `get_word_counts` | Word count stats per document/folder |
 | `get_synopsis` | Read the synopsis (index card text) for a document |
 | `get_notes` | Read the inspector notes for a document |
+
+**Stale view:** Document text is read from disk on every read. Only the binder (titles, new items) is cached; use `refresh_project` after adding/renaming. When the user returns to the thread after editing, call `check_document_freshness` for the document/chapter in question; if it reports changes, re-read before answering. **Write safety:** No MCP tools write to the project; the server cannot modify or break the .scriv structure.
 
 ## Technical Details
 

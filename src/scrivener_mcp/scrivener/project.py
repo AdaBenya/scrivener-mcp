@@ -39,6 +39,10 @@ class ScrivenerProject:
         # Parse the binder
         self._binder_items = parse_binder(self._scrivx_path)
 
+    def reload_binder(self) -> None:
+        """Reload the binder from disk (e.g. after adding/renaming items in Scrivener)."""
+        self._binder_items = parse_binder(self._scrivx_path)
+
     def _find_scrivx(self) -> Path | None:
         """Find the .scrivx binder file in the project."""
         for f in self.path.iterdir():

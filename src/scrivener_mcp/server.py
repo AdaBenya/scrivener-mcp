@@ -30,6 +30,9 @@ mcp = FastMCP("scrivener-mcp", transport_security=transport_security)
 # Global project reference (set via environment or tool)
 _project: ScrivenerProject | None = None
 
+# Per-document (UUID) -> (mtime, size) when last read; cleared on open_project
+_document_last_read: dict[str, tuple[float, int]] = {}
+
 
 def get_common_scrivener_locations() -> list[Path]:
     """Get common locations where Scrivener projects might be stored."""
@@ -49,6 +52,7 @@ def get_common_scrivener_locations() -> list[Path]:
             home / "Library" / "Mobile Documents" / "com~apple~CloudDocs",  # iCloud
             home / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Documents",
             home / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Scrivener",
+            home / "Documents" / "Sync files",  # Common sync folder (e.g. Drafts/Novel/*.scriv)
         ])
     elif platform.system() == "Windows":
         locations.extend([
@@ -80,6 +84,17 @@ def find_scriv_folders(search_path: Path, max_depth: int = 3) -> list[Path]:
     return results
 
 
+def _update_document_read_cache(project: ScrivenerProject, item) -> None:
+    """Record that we read this document (by file mtime/size) for freshness checks."""
+    global _document_last_read
+    if not item.is_text:
+        return
+    path = project.get_content_path(item)
+    if path.exists():
+        stat = path.stat()
+        _document_last_read[item.uuid] = (stat.st_mtime, stat.st_size)
+
+
 def get_project() -> ScrivenerProject:
     """Get the current project, loading from SCRIVENER_PROJECT env var if needed."""
     global _project
@@ -100,12 +115,13 @@ def get_project() -> ScrivenerProject:
 def find_projects(search_path: str | None = None) -> str:
     """Find Scrivener projects on your computer.
 
-    Searches common locations (Documents, Dropbox, iCloud, etc.) for .scriv folders.
-    Use this to discover available projects, then use open_project to load one.
+    Searches common locations (Documents, Dropbox, iCloud, Documents/Sync files, etc.)
+    up to six levels deep, so projects in nested folders (e.g. Drafts/Novel/*.scriv)
+    are found. Use this to discover available projects, then use open_project to load one.
 
     Args:
-        search_path: Optional specific folder to search. If not provided,
-                    searches common locations like Documents, Dropbox, iCloud.
+        search_path: Optional folder to search (e.g. a project or sync folder).
+                    If not provided, searches all common locations.
 
     Returns:
         List of found Scrivener projects with their paths.
@@ -113,14 +129,14 @@ def find_projects(search_path: str | None = None) -> str:
     projects = []
 
     if search_path:
-        # Search specific path
+        # Search specific path (e.g. project folder containing Draft/Book/*.scriv)
         search_dir = Path(search_path).expanduser().resolve()
         if search_dir.exists():
-            projects = find_scriv_folders(search_dir, max_depth=4)
+            projects = find_scriv_folders(search_dir, max_depth=6)
     else:
-        # Search common locations
+        # Search common locations (depth 6 to find nested Draft/Book/*.scriv)
         for location in get_common_scrivener_locations():
-            projects.extend(find_scriv_folders(location, max_depth=3))
+            projects.extend(find_scriv_folders(location, max_depth=6))
 
     if not projects:
         if search_path:
@@ -161,10 +177,11 @@ def open_project(path: str) -> str:
     Returns:
         Confirmation message with project info
     """
-    global _project
+    global _project, _document_last_read
 
     project_path = Path(path).expanduser().resolve()
     _project = ScrivenerProject(project_path)
+    _document_last_read.clear()
 
     # Check for lock
     lock_warning = ""
@@ -181,6 +198,87 @@ Total items: {total_items}
 Documents: {text_items}{lock_warning}
 
 💡 **Tip:** Use `scan_project` to get a bird's eye view of the manuscript (chapter summaries, word counts, opening lines). This helps you understand the full project without reading every document."""
+
+
+@mcp.tool()
+def refresh_project() -> str:
+    """Reload the project structure from disk without re-opening.
+
+    Document text is always read fresh when you read a document or chapter.
+    Only the binder (titles, new documents, moves, renames) is cached. Call this
+    after you add/rename/move items in Scrivener so Claude sees the updated structure.
+    """
+    global _project
+    if _project is None:
+        return "No project open. Use open_project first."
+    _project.reload_binder()
+    return "Project structure refreshed. New and renamed items are now visible."
+
+
+def _resolve_document(project: ScrivenerProject, identifier: str):
+    """Resolve identifier (title, path, or UUID) to a single BinderItem, or None."""
+    item = project.find_by_uuid(identifier)
+    if not item:
+        item = project.find_by_path(identifier)
+    if not item:
+        matches = project.find_by_title(identifier, exact=True)
+        if len(matches) == 1:
+            item = matches[0]
+        elif len(matches) > 1:
+            return None, "multiple"
+    if not item:
+        matches = project.find_by_title(identifier, exact=False)
+        if len(matches) == 1:
+            item = matches[0]
+        elif len(matches) > 1:
+            return None, "multiple"
+    return (item, None) if item else (None, "not_found")
+
+
+@mcp.tool()
+def check_document_freshness(identifier: str) -> str:
+    """Check whether a document has been modified since it was last read in this session.
+
+    Use this when continuing a conversation after the user may have edited in Scrivener.
+    If the document has changed, the tool will say so and you should re-read it to see
+    the latest content before commenting.
+
+    Args:
+        identifier: Document title, path, or UUID (e.g. "Chapter 3", "Draft/Chapter 3/Scene 1")
+
+    Returns:
+        One of: document unchanged; document changed (re-read to see latest); not read yet; or error.
+    """
+    project = get_project()
+    item, err = _resolve_document(project, identifier)
+    if err == "multiple":
+        return "Multiple documents match that identifier. Use the full path to specify which one."
+    if err == "not_found" or item is None:
+        return f"Document not found: {identifier}"
+
+    if item.is_folder:
+        return "That's a folder, not a document. Specify a document (e.g. a scene or chapter document) to check."
+
+    path = project.get_content_path(item)
+    if not path.exists():
+        return f"No content file for: {item.title}"
+
+    current = (path.stat().st_mtime, path.stat().st_size)
+    last = _document_last_read.get(item.uuid)
+
+    if last is None:
+        return (
+            f"📄 {item.title} has not been read yet in this session. "
+            "Use read_document or read_chapter to load it, then I can track whether it changes."
+        )
+
+    if current != last:
+        return (
+            f"⚠️ **{item.title}** has been modified since it was last read. "
+            "Re-read this document (or chapter) to see the latest content before commenting."
+        )
+
+    return f"✓ {item.title} — no changes since last read."
 
 
 @mcp.tool()
@@ -280,6 +378,7 @@ Contents:
 
     # Read document content
     content = project.read_document(item)
+    _update_document_read_cache(project, item)
     word_count = project.get_word_count(item)
 
     return f"""📄 {item.title}
@@ -289,7 +388,10 @@ Include in Compile: {"Yes" if item.include_in_compile else "No"}
 
 ---
 
-{content}"""
+{content}
+
+---
+💡 To check if this document was edited later: use check_document_freshness("{item.title}")."""
 
 
 @mcp.tool()
@@ -419,6 +521,7 @@ def read_chapter(chapter: str, include_titles: bool = True) -> str:
             parts.append(f"\n{'#' * min(child.depth - item.depth + 1, 4)} {child.title}\n")
         elif child.is_text:
             content = project.read_document(child)
+            _update_document_read_cache(project, child)
             if content:
                 word_count += len(content.split())
                 if include_titles:
@@ -426,6 +529,9 @@ def read_chapter(chapter: str, include_titles: bool = True) -> str:
                 parts.append(content)
 
     parts.append(f"\n---\n📊 Chapter word count: {word_count:,}")
+    parts.append(
+        '\n💡 To check if a document here was edited later: use check_document_freshness with its title.'
+    )
 
     return "\n".join(parts)
 
@@ -576,6 +682,7 @@ def scan_project(folder_path: str | None = None) -> str:
             # Get opening line
             try:
                 content = project.read_document(item)
+                _update_document_read_cache(project, item)
                 if content:
                     # Get first non-empty line, truncated
                     first_lines = [l.strip() for l in content.split('\n') if l.strip()]
