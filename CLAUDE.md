@@ -13,24 +13,29 @@ Allow writers to work in Scrivener while Claude reads their project to help with
 
 **Philosophy:** Write in Scrivener. Ask Claude for help. All writing stays in Scrivener.
 
-## Implemented MCP Tools (12)
+## Implemented MCP Tools (15)
 
 | Tool | Description |
 |------|-------------|
-| `find_projects` | Scan common locations (Documents, Dropbox, iCloud) for .scriv projects |
+| `find_projects` | Scan common locations for .scriv projects |
 | `open_project` | Load a Scrivener project by path |
-| `refresh_project` | Reload binder structure from disk (after adding/renaming in Scrivener) |
-| `check_document_freshness` | Check if a document was modified since last read; if so, re-read before commenting |
+| `refresh_project` | Reload binder structure from disk |
+| `check_document_freshness` | Check if a document was modified since last read; re-read if so |
 | `scan_project` | Bird's eye view: chapter titles, word counts, synopses, opening lines |
-| `list_binder` | Show project structure (folders, documents) as tree |
+| `list_binder` | Show project structure as tree |
 | `read_document` | Read a single document by title, path, or UUID |
 | `read_chapter` | Read a full chapter with all its scenes |
 | `search_project` | Full-text search across all documents |
 | `get_word_counts` | Word count stats per document/folder |
 | `get_synopsis` | Read the synopsis (index card text) for a document |
 | `get_notes` | Read the inspector notes for a document |
+| `kb_add` | Add character/location/event to knowledge base — **only after user confirms** |
+| `kb_query` | Query knowledge base by type or text |
+| `kb_list_types` | List knowledge base counts by type |
 
-**Stale view:** Document text is read from disk on every read. Only the binder (titles, new items) is cached; use `refresh_project` after adding/renaming. When the user returns to the thread after editing, call `check_document_freshness` for the document/chapter in question; if it reports changes, re-read before answering. **Write safety:** No MCP tools write to the project; the server cannot modify or break the .scriv structure.
+**Stale view:** Document text is read from disk on every read. Use `refresh_project` after adding/renaming. When the user returns after editing, call `check_document_freshness`; if changed, re-read before answering.
+
+**Knowledge base:** Stored in a JSON file alongside the .scriv (e.g. MyNovel-kb.json). Suggest additions when you spot characters, locations, or key events; call `kb_add` only after the user agrees. For versioning, use Scrivener’s built-in snapshots.
 
 ## Technical Details
 
@@ -66,12 +71,13 @@ scrivener-mcp/
 ├── src/
 │   └── scrivener_mcp/
 │       ├── __init__.py
-│       ├── server.py          # MCP server + all 10 tools
+│       ├── server.py          # MCP server + all tools
+│       ├── knowledge_base.py  # KB add/query (JSON alongside .scriv)
 │       └── scrivener/
 │           ├── __init__.py
 │           ├── project.py     # ScrivenerProject class
 │           ├── binder.py      # Binder/BinderItem parsing
-│           └── rtf.py         # RTF conversion utilities
+│           └── rtf.py          # RTF conversion utilities
 ├── pyproject.toml
 ├── README.md
 └── CLAUDE.md

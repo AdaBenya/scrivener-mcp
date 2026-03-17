@@ -71,7 +71,7 @@ If your projects live elsewhere, run **find_projects** with a path, for example:
 
 Then use **open_project** with the full path of the `.scriv` folder (e.g. from the find list) to open a project.
 
-## Available Tools (12)
+## Available Tools (15)
 
 | Tool | Description |
 |------|-------------|
@@ -87,6 +87,10 @@ Then use **open_project** with the full path of the `.scriv` folder (e.g. from t
 | `get_word_counts` | Word count statistics by chapter/folder |
 | `get_synopsis` | Read the synopsis (index card text) for a document |
 | `get_notes` | Read the inspector notes for a document |
+| **Knowledge base** | |
+| `kb_add` | Add a character, location, or event to the project knowledge base (use only after user confirms) |
+| `kb_query` | Query the knowledge base by type or text |
+| `kb_list_types` | List knowledge base counts by type |
 
 ## Recommended Workflow
 
@@ -108,6 +112,12 @@ Then use **open_project** with the full path of the `.scriv` folder (e.g. from t
 - "Find plot holes based on the chapter summaries"
 - "Refresh the project" (after adding or renaming items in Scrivener)
 - "Check if Chapter 3 has changed" or "Did I change that document since you last read it?"
+- "Add the character Maria to the knowledge base" (Claude should suggest first, then add when you agree)
+- "What do we have in the knowledge base for characters?"
+
+## Knowledge base
+
+A structured store (characters, locations, events) lives in a JSON file **alongside** your `.scriv` folder (e.g. `MyNovel-kb.json`). Claude can query it and, **only after you confirm**, add entries when it spots new characters or key facts. Use it for consistency checks and to avoid re-reading the whole manuscript for simple lookups. For document and project versioning, use Scrivener’s built-in snapshots and versioning.
 
 ## How It Works
 
@@ -133,7 +143,7 @@ All writing stays in Scrivener where it belongs.
 
 - Scrivener 3 format only (Scrivener 1/2 not tested)
 - Some RTF formatting may not convert perfectly
-- **Read-only by design** — this MCP has no write tools; it cannot modify your project or break its structure
+- **Manuscript read-only:** The MCP does not edit your Scrivener documents or binder. It can write to the **knowledge base** (sibling JSON file) and run **versioning** (Git commits or draft save/restore) when you ask
 
 ## Related Projects
 

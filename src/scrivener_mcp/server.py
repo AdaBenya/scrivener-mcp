@@ -1,6 +1,7 @@
 """MCP Server for Scrivener projects."""
 
 import argparse
+import json
 import os
 import platform
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from .knowledge_base import add as kb_add_record, get_kb_path, list_types as kb_list_types_fn, query as kb_query_fn
 from .scrivener import ScrivenerProject
 
 # Configure transport security to allow Docker and local connections
@@ -213,6 +215,92 @@ def refresh_project() -> str:
         return "No project open. Use open_project first."
     _project.reload_binder()
     return "Project structure refreshed. New and renamed items are now visible."
+
+
+@mcp.tool()
+def kb_add(
+    record_type: str,
+    name: str,
+    attributes: str | dict | None = None,
+    source: str | None = None,
+) -> str:
+    """Add a record to the project knowledge base (characters, locations, events).
+
+    Only call after the user has confirmed they want to store this. Suggest additions
+    when you spot new characters, locations, or significant events; then add only if
+    the user agrees.
+
+    Args:
+        record_type: One of character, location, event, other.
+        name: Display name or title for the record.
+        attributes: Optional key-value map (object) or JSON string (e.g. {"description": "...", "first_seen": "Chapter 1"}).
+        source: Optional document path or UUID where this was found.
+
+    Returns:
+        Confirmation with the created record summary.
+    """
+    project = get_project()
+    attrs = {}
+    if attributes is not None:
+        if isinstance(attributes, dict):
+            attrs = attributes
+        elif isinstance(attributes, str):
+            try:
+                attrs = json.loads(attributes)
+            except json.JSONDecodeError:
+                return "Invalid attributes JSON. Use a valid JSON object string."
+            if not isinstance(attrs, dict):
+                return "Attributes JSON must be an object, not an array or other type."
+        else:
+            return "Attributes must be a JSON object (or object string)."
+    record = kb_add_record(project.path, record_type, name, attributes=attrs, source=source)
+    return f"Added to knowledge base: {record['type']} \"{record['name']}\" (id: {record['id']})."
+
+
+@mcp.tool()
+def kb_query(type_filter: str | None = None, query_text: str | None = None) -> str:
+    """Query the project knowledge base (characters, locations, events).
+
+    Args:
+        type_filter: Optional. One of character, location, event, other.
+        query_text: Optional. Filter records whose name or attributes contain this string.
+
+    Returns:
+        List of matching records with type, name, attributes, source, created_at.
+    """
+    project = get_project()
+    records = kb_query_fn(project.path, type_filter=type_filter, query_text=query_text)
+    if not records:
+        if type_filter or query_text:
+            return "No matching knowledge base records."
+        return "Knowledge base is empty. Use kb_add (with user confirmation) to add characters, locations, or events."
+    lines = [f"Found {len(records)} record(s):\n"]
+    for r in records:
+        lines.append(f"- [{r.get('type', 'other')}] {r.get('name', '')}")
+        attrs = r.get("attributes") or {}
+        if attrs:
+            lines.append(f"  {json.dumps(attrs, ensure_ascii=False)}")
+        if r.get("source"):
+            lines.append(f"  source: {r['source']}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def kb_list_types() -> str:
+    """List knowledge base record counts by type (character, location, event, other).
+
+    Returns:
+        Counts per type; suggests opening the project and using kb_add if empty.
+    """
+    project = get_project()
+    counts = kb_list_types_fn(project.path)
+    if not counts:
+        return "Knowledge base is empty. Use kb_add (with user confirmation) to add characters, locations, or events."
+    path = get_kb_path(project.path)
+    lines = [f"Knowledge base: {path}\n", "Counts by type:"]
+    for t, n in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+        lines.append(f"  {t}: {n}")
+    return "\n".join(lines)
 
 
 def _resolve_document(project: ScrivenerProject, identifier: str):
