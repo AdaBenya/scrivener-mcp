@@ -9,7 +9,13 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-from .knowledge_base import add as kb_add_record, get_kb_path, list_types as kb_list_types_fn, query as kb_query_fn
+from .knowledge_base import (
+    add as kb_add_record,
+    get_kb_path,
+    list_types as kb_list_types_fn,
+    query as kb_query_fn,
+    upsert_checkpoint as kb_upsert_checkpoint,
+)
 from .scrivener import ScrivenerProject
 
 # Configure transport security to allow Docker and local connections
@@ -224,17 +230,27 @@ def kb_add(
     attributes: str | dict | None = None,
     source: str | None = None,
 ) -> str:
-    """Add a record to the project knowledge base (characters, locations, events).
+    """Add a record to the project knowledge base (characters, locations, events, checkpoints, fixed facts).
 
     Only call after the user has confirmed they want to store this. Suggest additions
     when you spot new characters, locations, or significant events; then add only if
     the user agrees.
 
+    For checkpoints (reader state per section): use record_type "checkpoint", and pass
+    attributes with document_path, order (optional), synopsis, reader_knows. If source
+    is provided, an existing checkpoint for that document is updated instead of duplicated.
+    Prefer using the document UUID as source (most stable across renames/moves).
+
+    For fixed facts (atomic story-world truths that later sections should not contradict):
+    use record_type "fixed_fact" with a short, citable attributes payload. Suggested keys:
+    fact (1–3 sentences), entities (list of strings), introduced_in_document_path, evidence,
+    sensitivity ("hard"|"soft"), status ("active"|"retconned").
+
     Args:
-        record_type: One of character, location, event, other.
+        record_type: One of character, location, event, other, checkpoint, fixed_fact.
         name: Display name or title for the record.
-        attributes: Optional key-value map (object) or JSON string (e.g. {"description": "...", "first_seen": "Chapter 1"}).
-        source: Optional document path or UUID where this was found.
+        attributes: Optional key-value map (object) or JSON string (e.g. {"description": "..."} or for checkpoint: document_path, order, synopsis, reader_knows).
+        source: Optional document path or UUID (for checkpoints, used to match/upsert by document).
 
     Returns:
         Confirmation with the created record summary.
@@ -253,7 +269,10 @@ def kb_add(
                 return "Attributes JSON must be an object, not an array or other type."
         else:
             return "Attributes must be a JSON object (or object string)."
-    record = kb_add_record(project.path, record_type, name, attributes=attrs, source=source)
+    if (record_type.strip().lower() == "checkpoint" and source and source.strip()):
+        record = kb_upsert_checkpoint(project.path, source.strip(), name, attributes=attrs)
+    else:
+        record = kb_add_record(project.path, record_type, name, attributes=attrs, source=source)
     return f"Added to knowledge base: {record['type']} \"{record['name']}\" (id: {record['id']})."
 
 
@@ -301,6 +320,300 @@ def kb_list_types() -> str:
     for t, n in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
         lines.append(f"  {t}: {n}")
     return "\n".join(lines)
+
+
+@mcp.tool()
+def kb_list_fixed_facts(query_text: str | None = None) -> str:
+    """List fixed facts (atomic story-world truths) from the knowledge base.
+
+    Args:
+        query_text: Optional. Filter fixed facts whose name or attributes contain this string.
+
+    Returns:
+        A readable list of fixed_fact records (name + key attributes), or a message if none.
+    """
+    project = get_project()
+    records = kb_query_fn(project.path, type_filter="fixed_fact", query_text=query_text)
+    if not records:
+        if query_text:
+            return "No matching fixed facts."
+        return "No fixed facts in the knowledge base."
+
+    lines = ["Fixed facts:\n"]
+    for r in records:
+        attrs = r.get("attributes") or {}
+        fact = attrs.get("fact") or ""
+        entities = attrs.get("entities") or []
+        downstream_references = attrs.get("downstream_references") or []
+        sensitivity = attrs.get("sensitivity")
+        status = attrs.get("status")
+
+        lines.append(f"- {r.get('name')}")
+        if fact:
+            lines.append(f"  fact: {fact}")
+        if entities:
+            lines.append(f"  entities: {entities}")
+        if downstream_references:
+            lines.append(f"  downstream_references: {downstream_references}")
+        if sensitivity:
+            lines.append(f"  sensitivity: {sensitivity}")
+        if status:
+            lines.append(f"  status: {status}")
+        if r.get("source"):
+            lines.append(f"  source: {r.get('source')}")
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
+@mcp.tool()
+def kb_add_section_checkpoint(identifier: str, synopsis: str, reader_knows: str) -> str:
+    """Add or update a section-level checkpoint for a single document (UUID-backed).
+
+    This is a convenience wrapper that enforces the recommended checkpoint convention:
+    - source = binder item UUID
+    - attributes.document_path = binder path for readability
+
+    Args:
+        identifier: Document title, path, or UUID (must resolve to a single document).
+        synopsis: Short synopsis for this section/document.
+        reader_knows: What the reader knows at the end of this section.
+
+    Returns:
+        Confirmation message (or a clear message if identifier is ambiguous/invalid).
+    """
+    project = get_project()
+    item, err = _resolve_document(project, identifier)
+    if err == "multiple":
+        return "Multiple documents match that identifier. Use the full path to specify which one."
+    if err == "not_found" or item is None:
+        return f"Document not found: {identifier}"
+    if item.is_folder:
+        return "This helper is for section documents only (not folders)."
+
+    ordered = project.get_draft_text_items_in_order()
+    order: int | None = None
+    for idx, doc in ordered:
+        if doc.uuid == item.uuid:
+            order = idx
+            break
+
+    attrs: dict = {
+        "document_path": item.path,
+        "synopsis": synopsis,
+        "reader_knows": reader_knows,
+    }
+    if order is not None:
+        attrs["order"] = order
+
+    record = kb_upsert_checkpoint(project.path, item.uuid, item.title, attributes=attrs)
+
+    if order is None:
+        return (
+            f"Added section checkpoint: \"{record['name']}\" (id: {record['id']}). "
+            "Note: this document is not a draft text item, so it won't affect draft-order orientation tools."
+        )
+    return f"Added section checkpoint: \"{record['name']}\" (id: {record['id']}, draft position: {order})."
+
+
+def _fixed_fact_matches_entities(record: dict, entities: list[str]) -> bool:
+    attrs = record.get("attributes") or {}
+    record_entities = attrs.get("entities") or []
+    if not isinstance(record_entities, (list, tuple)):
+        return False
+    wanted = {e.strip().lower() for e in entities if isinstance(e, str) and e.strip()}
+    have = {e.strip().lower() for e in record_entities if isinstance(e, str) and e.strip()}
+    return bool(wanted & have)
+
+
+@mcp.tool()
+def kb_revision_brief(identifier: str, entities: list[str] | None = None) -> str:
+    """Revision startup helper: orientation + relevant fixed facts (by entities).
+
+    This keeps the 'downstream trigger' procedural (you call it when revising), but makes
+    the workflow repeatable in one tool call.
+    """
+    project = get_project()
+    item, err = _resolve_document(project, identifier)
+    if err == "multiple":
+        return "Multiple documents match that identifier. Use the full path to specify which one."
+    if err == "not_found" or item is None:
+        return f"Document not found: {identifier}"
+
+    ordered = project.get_draft_text_items_in_order()
+    order: int | None = None
+    for idx, doc in ordered:
+        if doc.uuid == item.uuid:
+            order = idx
+            break
+
+    lines: list[str] = []
+    lines.append("Revision brief:\n")
+    lines.append(f"Section: {item.title}")
+    lines.append(f"Path: {item.path}")
+    lines.append(f"UUID: {item.uuid}")
+    if order is not None:
+        lines.append(f"Draft position: {order}")
+    else:
+        lines.append("Draft position: (not a draft text item)")
+    lines.append("")
+    lines.append("Reader orientation (from previous section checkpoint):")
+    lines.append(kb_get_reader_checkpoint_before(item.uuid))
+
+    if entities:
+        fixed_facts = kb_query_fn(project.path, type_filter="fixed_fact")
+        matches = [r for r in fixed_facts if _fixed_fact_matches_entities(r, entities)]
+        lines.append("")
+        lines.append(f"Fixed facts touching entities {entities}:")
+        if not matches:
+            lines.append("  (none found)")
+        else:
+            for r in matches:
+                attrs = r.get("attributes") or {}
+                lines.append(f"- {r.get('name')}")
+                if attrs.get("fact"):
+                    lines.append(f"  fact: {attrs.get('fact')}")
+                if attrs.get("downstream_references"):
+                    lines.append(f"  downstream_references: {attrs.get('downstream_references')}")
+                if attrs.get("sensitivity"):
+                    lines.append(f"  sensitivity: {attrs.get('sensitivity')}")
+                if attrs.get("status"):
+                    lines.append(f"  status: {attrs.get('status')}")
+    else:
+        lines.append("")
+        lines.append("Fixed facts: (provide an entities list to surface relevant fixed facts)")
+
+    return "\n".join(lines).strip()
+
+
+@mcp.tool()
+def kb_suggest_entities(query_text: str) -> str:
+    """Suggest canonical entity names from the KB (characters + locations).
+
+    Use this to keep fixed_fact.attributes.entities consistent (avoid 'Gustin' vs 'Steve Gustin').
+    """
+    project = get_project()
+    q = (query_text or "").strip()
+    if not q:
+        return "Provide query_text to search for entity names."
+
+    characters = kb_query_fn(project.path, type_filter="character", query_text=q)
+    locations = kb_query_fn(project.path, type_filter="location", query_text=q)
+
+    if not characters and not locations:
+        return "No matching characters or locations in the knowledge base."
+
+    lines = ["Suggested canonical entity names:\n"]
+    if characters:
+        lines.append("Characters:")
+        for r in characters:
+            lines.append(f"  - {r.get('name')}")
+        lines.append("")
+    if locations:
+        lines.append("Locations:")
+        for r in locations:
+            lines.append(f"  - {r.get('name')}")
+    return "\n".join(lines).strip()
+
+
+def _checkpoint_matches_item(record: dict, item) -> bool:
+    """True if this KB record (checkpoint) refers to the given binder item."""
+    src = record.get("source") or ""
+    doc_path = (record.get("attributes") or {}).get("document_path") or ""
+    return src == item.path or src == item.uuid or doc_path == item.path
+
+
+@mcp.tool()
+def kb_get_reader_checkpoint_before(identifier: str) -> str:
+    """Get the reader_knows text from the checkpoint for the section immediately before this one.
+
+    Use when starting a pass on a section so you only see what the reader knew at the end of
+    the previous section. Orientation is preserved: you never see reader state from later sections.
+
+    Args:
+        identifier: Document title, path, or UUID (the section you are about to work on).
+
+    Returns:
+        The previous section's reader_knows text, or a message if none/first section.
+    """
+    project = get_project()
+    item, err = _resolve_document(project, identifier)
+    if err == "multiple":
+        return "Multiple documents match that identifier. Use the full path to specify which one."
+    if err == "not_found" or item is None:
+        return f"Document not found: {identifier}"
+
+    if item.is_folder:
+        return "Checkpoints are per document. Specify a document (section), not a folder."
+
+    ordered = project.get_draft_text_items_in_order()
+    position = None
+    for idx, doc in ordered:
+        if doc.uuid == item.uuid:
+            position = idx
+            break
+    if position is None:
+        return "That document is not in the Draft folder or is not a text item."
+
+    if position == 0:
+        return "No previous section; this is the first document in the draft."
+
+    prev_item = ordered[position - 1][1]
+    checkpoints = kb_query_fn(project.path, type_filter="checkpoint")
+    for r in checkpoints:
+        if _checkpoint_matches_item(r, prev_item):
+            reader_knows = (r.get("attributes") or {}).get("reader_knows")
+            if reader_knows:
+                return reader_knows
+            return "(Checkpoint exists but reader_knows is empty.)"
+    return "No checkpoint for the previous section."
+
+
+@mcp.tool()
+def kb_get_checkpoints_ordered() -> str:
+    """List all checkpoints in binder order (position, path, synopsis, reader_knows).
+
+    Order is computed from the current draft so it stays correct after reordering.
+    """
+    project = get_project()
+    ordered = project.get_draft_text_items_in_order()
+    checkpoints = kb_query_fn(project.path, type_filter="checkpoint")
+
+    # Match each checkpoint to a position; unmatched go at end with position "?"
+    by_position: list[tuple[int | str, dict]] = []
+    matched = set()
+    for idx, doc in ordered:
+        for r in checkpoints:
+            if r.get("id") in matched:
+                continue
+            if _checkpoint_matches_item(r, doc):
+                by_position.append((idx, r))
+                matched.add(r.get("id"))
+                break
+    for r in checkpoints:
+        if r.get("id") not in matched:
+            by_position.append(("?", r))
+
+    by_position.sort(key=lambda x: (x[0] if isinstance(x[0], int) else 9999, str(x[0])))
+
+    if not by_position:
+        return "No checkpoints in the knowledge base."
+
+    lines = ["Checkpoints (in draft order):\n"]
+    for pos, r in by_position:
+        attrs = r.get("attributes") or {}
+        path = attrs.get("document_path") or r.get("source") or "—"
+        synopsis = (attrs.get("synopsis") or "")[:80]
+        if len(attrs.get("synopsis") or "") > 80:
+            synopsis += "..."
+        reader = (attrs.get("reader_knows") or "")[:100]
+        if len(attrs.get("reader_knows") or "") > 100:
+            reader += "..."
+        lines.append(f"  {pos}. {path}")
+        lines.append(f"     synopsis: {synopsis}")
+        lines.append(f"     reader_knows: {reader}")
+        lines.append("")
+    return "\n".join(lines).strip()
 
 
 def _resolve_document(project: ScrivenerProject, identifier: str):

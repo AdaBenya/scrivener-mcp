@@ -75,6 +75,37 @@ def add(
     return record
 
 
+def upsert_checkpoint(
+    project_path: Path,
+    source: str,
+    name: str,
+    attributes: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Update existing checkpoint with same source, or add new one.
+
+    Used so there is at most one checkpoint per document (by source).
+    """
+    path = get_kb_path(project_path)
+    records = _load_records(path)
+    source_stripped = source.strip() if source else ""
+    attrs = dict(attributes or {})
+
+    for i, r in enumerate(records):
+        if (r.get("type") == "checkpoint" and
+                (r.get("source") == source_stripped or
+                 (r.get("attributes") or {}).get("document_path") == source_stripped)):
+            records[i] = {
+                **r,
+                "name": name.strip(),
+                "attributes": attrs,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _save_records(path, records)
+            return records[i]
+
+    return add(project_path, "checkpoint", name, attributes=attrs, source=source_stripped or None)
+
+
 def query(
     project_path: Path,
     type_filter: str | None = None,

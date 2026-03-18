@@ -13,7 +13,7 @@ Allow writers to work in Scrivener while Claude reads their project to help with
 
 **Philosophy:** Write in Scrivener. Ask Claude for help. All writing stays in Scrivener.
 
-## Implemented MCP Tools (15)
+## Implemented MCP Tools (21)
 
 | Tool | Description |
 |------|-------------|
@@ -29,13 +29,23 @@ Allow writers to work in Scrivener while Claude reads their project to help with
 | `get_word_counts` | Word count stats per document/folder |
 | `get_synopsis` | Read the synopsis (index card text) for a document |
 | `get_notes` | Read the inspector notes for a document |
-| `kb_add` | Add character/location/event to knowledge base — **only after user confirms** |
+| `kb_add` | Add character/location/event/checkpoint/fixed_fact to knowledge base — **only after user confirms** |
 | `kb_query` | Query knowledge base by type or text |
 | `kb_list_types` | List knowledge base counts by type |
+| `kb_list_fixed_facts` | List fixed facts (atomic story-world truths), optionally filtered by text |
+| `kb_add_section_checkpoint` | Add/update a section checkpoint (UUID-backed) from a document identifier |
+| `kb_revision_brief` | Revision startup: previous-section reader state + relevant fixed facts (by entities) |
+| `kb_suggest_entities` | Suggest canonical entity names from KB (characters/locations) |
+| `kb_get_reader_checkpoint_before` | Get previous section's reader_knows only (orientation-safe) |
+| `kb_get_checkpoints_ordered` | List all checkpoints in draft (binder) order |
 
 **Stale view:** Document text is read from disk on every read. Use `refresh_project` after adding/renaming. When the user returns after editing, call `check_document_freshness`; if changed, re-read before answering.
 
 **Knowledge base:** Stored in a JSON file alongside the .scriv (e.g. MyNovel-kb.json). Suggest additions when you spot characters, locations, or key events; call `kb_add` only after the user agrees. For versioning, use Scrivener’s built-in snapshots.
+
+**Checkpoints:** Use `record_type="checkpoint"` with attributes `document_path`, optional `order`, `synopsis`, `reader_knows`; `source` = document UUID (recommended; stable across renames/moves) or path (upsert by document). `kb_get_reader_checkpoint_before(identifier)` returns only the **previous** section's `reader_knows`—so "reader knows" is always from sections before the current one and orientation stays correct when rewriting earlier sections. `kb_get_checkpoints_ordered()` lists all checkpoints in binder order. `kb_add_section_checkpoint(identifier, synopsis, reader_knows)` is the easiest way to write a UUID-backed section checkpoint.
+
+**Fixed facts:** Use `record_type="fixed_fact"` to store atomic, citable story-world truths (1–3 sentence `fact` plus optional `entities`, evidence, sensitivity, status, and optional `downstream_references` (a list of binder document paths where the fact is relied upon later)). Query these before/after rewrites to spot downstream continuity breaks without rereading the whole manuscript. For `entities`, use canonical KB names (character/location `name`); use `kb_suggest_entities(query_text)` to find canonical spellings.
 
 ## Technical Details
 

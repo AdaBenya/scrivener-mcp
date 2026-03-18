@@ -78,6 +78,23 @@ class ScrivenerProject:
                 return item
         return None
 
+    def get_draft_text_items_in_order(self) -> list[tuple[int, BinderItem]]:
+        """Return (position_index, BinderItem) for each text item in draft order.
+
+        Position 0 = first document in the draft. Used for checkpoint ordering
+        so 'previous section' is well-defined.
+        """
+        draft = self.find_draft_folder()
+        if not draft:
+            return []
+        result: list[tuple[int, BinderItem]] = []
+        for item in draft.walk():
+            if item == draft:
+                continue
+            if item.is_text:
+                result.append((len(result), item))
+        return result
+
     def find_by_title(self, title: str, exact: bool = True) -> list[BinderItem]:
         """Find all items matching the given title."""
         results = []

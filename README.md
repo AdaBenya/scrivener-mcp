@@ -71,7 +71,7 @@ If your projects live elsewhere, run **find_projects** with a path, for example:
 
 Then use **open_project** with the full path of the `.scriv` folder (e.g. from the find list) to open a project.
 
-## Available Tools (15)
+## Available Tools (21)
 
 | Tool | Description |
 |------|-------------|
@@ -88,9 +88,15 @@ Then use **open_project** with the full path of the `.scriv` folder (e.g. from t
 | `get_synopsis` | Read the synopsis (index card text) for a document |
 | `get_notes` | Read the inspector notes for a document |
 | **Knowledge base** | |
-| `kb_add` | Add a character, location, or event to the project knowledge base (use only after user confirms) |
+| `kb_add` | Add a character, location, event, checkpoint, or fixed fact to the project knowledge base (use only after user confirms) |
 | `kb_query` | Query the knowledge base by type or text |
 | `kb_list_types` | List knowledge base counts by type |
+| `kb_list_fixed_facts` | List fixed facts (atomic story-world truths), optionally filtered by text |
+| `kb_add_section_checkpoint` | Add/update a section checkpoint (UUID-backed) from a document identifier |
+| `kb_revision_brief` | Revision startup: previous-section reader state + relevant fixed facts (by entities) |
+| `kb_suggest_entities` | Suggest canonical entity names from KB (characters/locations) |
+| `kb_get_reader_checkpoint_before` | Get the previous section's reader_knows only (orientation-safe when rewriting earlier sections) |
+| `kb_get_checkpoints_ordered` | List all checkpoints in draft (binder) order |
 
 ## Recommended Workflow
 
@@ -117,7 +123,26 @@ Then use **open_project** with the full path of the `.scriv` folder (e.g. from t
 
 ## Knowledge base
 
-A structured store (characters, locations, events) lives in a JSON file **alongside** your `.scriv` folder (e.g. `MyNovel-kb.json`). Claude can query it and, **only after you confirm**, add entries when it spots new characters or key facts. Use it for consistency checks and to avoid re-reading the whole manuscript for simple lookups. For document and project versioning, use Scrivener’s built-in snapshots and versioning.
+A structured store (characters, locations, events, checkpoints, fixed facts) lives in a JSON file **alongside** your `.scriv` folder (e.g. `MyNovel-kb.json`). Claude can query it and, **only after you confirm**, add entries when it spots new characters or key facts. Use it for consistency checks and to avoid re-reading the whole manuscript for simple lookups. For document and project versioning, use Scrivener’s built-in snapshots and versioning.
+
+### Checkpoint records and orientation
+
+You can store **checkpoints** per section: a short synopsis and "what the reader knows so far" (`reader_knows`). Use them so that when working on section N+1, Claude only sees reader state from the **previous** section (N), never from later sections—so orientation stays correct even if you rewrite an earlier section.
+
+- **Convention:** `record_type="checkpoint"`, `attributes`: `document_path`, optional `order`, `synopsis`, `reader_knows`; `source` = document UUID (recommended) or document path (used to match/upsert). Adding a checkpoint with the same `source` updates the existing one (one checkpoint per document).
+- **`kb_get_reader_checkpoint_before(identifier)`** — Returns the `reader_knows` text from the section **immediately before** the given document in draft order. Call it when starting a pass on a section so you only get "what the reader knew at the start of this section."
+- **`kb_get_checkpoints_ordered()`** — Returns all checkpoints in **binder (draft) order** (position, path, synopsis, truncated reader_knows). Order is computed from the current project so it stays correct after reordering.
+- **`kb_add_section_checkpoint(identifier, synopsis, reader_knows)`** — Convenience helper that writes a UUID-backed section checkpoint with `document_path` filled in.
+- **`kb_revision_brief(identifier, entities=[...])`** — One-call revision startup: previous-section reader orientation + fixed facts touching the given entities (and their `downstream_references` when present).
+
+### Fixed facts (downstream continuity)
+
+For downstream implication tracking and continuity, you can store **fixed facts**: small, atomic story-world truths that later sections should not contradict (even if the reader doesn’t learn them until later).
+
+- **Convention:** `record_type="fixed_fact"`. Suggested attributes: `fact` (1–3 sentences), `entities` (list of strings), optional `introduced_in_document_path`, `evidence`, `sensitivity` (`"hard"` or `"soft"`), `status` (`"active"` or `"retconned"`), and optional `downstream_references` (list of binder document paths where the fact is relied upon later).
+- **Usage:** Before rewriting a section, Claude can query `fixed_fact` records relevant to the entities in that section and flag contradictions or downstream impacts without rereading the whole manuscript.
+
+**Entity naming convention:** For `fixed_fact.attributes.entities`, use canonical names (the `name` field) from KB `character`/`location` records. Use `kb_suggest_entities(query_text)` to find the canonical name.
 
 ## How It Works
 
