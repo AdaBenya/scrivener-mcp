@@ -1248,9 +1248,16 @@ def main():
     args = parser.parse_args()
 
     if args.http:
-        # Set uvicorn host/port via environment variables
-        os.environ["UVICORN_HOST"] = args.host
-        os.environ["UVICORN_PORT"] = str(args.port)
+        # FastMCP takes its host and port from its own settings (the UVICORN_* variables
+        # used previously were ignored, so the server always ran on 127.0.0.1:8000).
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        # Allow the chosen port as a Host header too (DNS-rebinding protection).
+        security = mcp.settings.transport_security or transport_security
+        for host in (f"127.0.0.1:{args.port}", f"localhost:{args.port}"):
+            if host not in security.allowed_hosts:
+                security.allowed_hosts.append(host)
+        mcp.settings.transport_security = security
         print(f"Starting Scrivener MCP server (HTTP) on {args.host}:{args.port}")
         print(
             "Allowed hosts: "

@@ -21,7 +21,7 @@ classifiers = [
     "Topic :: Text Processing",
 ]
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.0.0,<2",
     "striprtf>=0.0.26",
 ]
 
