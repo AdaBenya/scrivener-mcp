@@ -1234,8 +1234,8 @@ def main():
     )
     parser.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="Host for HTTP server (default: 0.0.0.0)"
+        default="127.0.0.1",
+        help="Host for HTTP server (default: 127.0.0.1, this computer only; use 0.0.0.0 to allow the network)"
     )
 
     args = parser.parse_args()
