@@ -6,7 +6,7 @@ import os
 import platform
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .knowledge_base import (
@@ -49,14 +49,7 @@ def get_allowed_hosts() -> list[str]:
     return allowed_hosts
 
 
-# Configure transport security to allow local and Docker-friendly connections.
-transport_security = TransportSecuritySettings(
-    enable_dns_rebinding_protection=True,
-    allowed_hosts=get_allowed_hosts(),
-)
-
-# Initialize the MCP server
-mcp = FastMCP("scrivener-mcp", transport_security=transport_security)
+mcp = MCPServer("scrivener-mcp")
 
 # Global project reference (set via environment or tool)
 _project: ScrivenerProject | None = None
@@ -1248,23 +1241,26 @@ def main():
     args = parser.parse_args()
 
     if args.http:
-        # FastMCP takes its host and port from its own settings (the UVICORN_* variables
-        # used previously were ignored, so the server always ran on 127.0.0.1:8000).
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
-        # Allow the chosen port as a Host header too (DNS-rebinding protection).
-        security = mcp.settings.transport_security or transport_security
+        allowed_hosts = get_allowed_hosts()
         for host in (f"127.0.0.1:{args.port}", f"localhost:{args.port}"):
-            if host not in security.allowed_hosts:
-                security.allowed_hosts.append(host)
-        mcp.settings.transport_security = security
+            if host not in allowed_hosts:
+                allowed_hosts.append(host)
+        transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=allowed_hosts,
+        )
         print(f"Starting Scrivener MCP server (HTTP) on {args.host}:{args.port}")
         print(
             "Allowed hosts: "
-            + ", ".join(get_allowed_hosts())
+            + ", ".join(allowed_hosts)
             + " (extend with SCRIVENER_MCP_ALLOWED_HOSTS if needed)"
         )
-        mcp.run(transport="streamable-http")
+        mcp.run(
+            transport="streamable-http",
+            host=args.host,
+            port=args.port,
+            transport_security=transport_security,
+        )
     else:
         mcp.run()  # stdio transport for local MCP clients
 
